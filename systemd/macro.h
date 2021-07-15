@@ -20,12 +20,18 @@
   along with python-systemd; If not, see <http://www.gnu.org/licenses/>.
 ***/
 
+#define _const_ __attribute__ ((const))
+#define _pure_ __attribute__ ((pure))
+#define _unused_ __attribute__((__unused__))
+
 #define DISABLE_WARNING_MISSING_PROTOTYPES                              \
         _Pragma("GCC diagnostic push");                                 \
         _Pragma("GCC diagnostic ignored \"-Wmissing-prototypes\"")
 
 #define REENABLE_WARNING                                                \
         _Pragma("GCC diagnostic pop")
+
+
 
 #define DEFINE_TRIVIAL_CLEANUP_FUNC(type, func)                 \
         static inline void func##p(type *p) {                   \
@@ -45,11 +51,17 @@
 
 #define _cleanup_(x) __attribute__((cleanup(x)))
 
+
+
 static inline void freep(void *p) {
         free(*(void**) p);
 }
 
+
 #define _cleanup_free_ _cleanup_(freep)
+
+
+
 
 #if defined(static_assert)
 #  define assert_cc(expr)                               \

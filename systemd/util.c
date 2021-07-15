@@ -32,8 +32,35 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <net/if.h>
+#include <errno.h>
 
 #include "util.h"
+
+int ppoll_usec(struct pollfd *fds, size_t nfds, usec_t timeout) {
+        struct timespec ts;
+        int r;
+
+        assert(fds || nfds == 0);
+
+        if (nfds == 0)
+                return 0;
+
+        r = ppoll(fds, nfds, timeout == USEC_INFINITY ? NULL : timespec_store(&ts, timeout), NULL);
+        if (r < 0)
+                return -errno;
+        if (r == 0)
+                return 0;
+
+        for (size_t i = 0, n = r; i < nfds && n > 0; i++) {
+                if (fds[i].revents == 0)
+                        continue;
+                if (fds[i].revents & POLLNVAL)
+                        return -EBADF;
+                n--;
+        }
+
+        return r;
+}
 
 int safe_atou(const char *s, unsigned *ret_u) {
         char *x = NULL;
@@ -185,4 +212,115 @@ int parse_sockaddr(const char *s,
         }
 
         return 0;
+}
+
+int fd_wait_for_event(int fd, int event, usec_t timeout) {
+        struct pollfd pollfd = {
+                .fd = fd,
+                .events = event,
+        };
+        int r;
+
+        r = ppoll_usec(&pollfd, 1, timeout);
+        if (r <= 0)
+                return r;
+
+        return pollfd.revents;
+}
+
+
+ssize_t loop_read(int fd, void *buf, size_t nbytes, bool do_poll) {
+        uint8_t *p = buf;
+        ssize_t n = 0;
+
+        assert(fd >= 0);
+        assert(buf);
+
+        while (nbytes > 0) {
+                ssize_t k;
+
+                k = read(fd, p, nbytes);
+                if (k < 0 && errno == EINTR)
+                        continue;
+
+                if (k < 0 && errno == EAGAIN && do_poll) {
+
+                        /* We knowingly ignore any return value here,
+                         * and expect that any error/EOF is reported
+                         * via read() */
+
+                        fd_wait_for_event(fd, POLLIN, (usec_t) -1);
+                        continue;
+                }
+
+                if (k <= 0)
+                        return n > 0 ? n : (k < 0 ? -errno : 0);
+
+                p += k;
+                nbytes -= k;
+                n += k;
+        }
+
+        return n;
+}
+
+int safe_close(int fd) {
+
+        /*
+         * Like close_nointr() but cannot fail. Guarantees errno is
+         * unchanged. Is a NOP with negative fds passed, and returns
+         * -1, so that it can be used in this syntax:
+         *
+         * fd = safe_close(fd);
+         */
+
+        if (fd >= 0) {
+                PROTECT_ERRNO;
+                /* The kernel might return pretty much any error code
+                 * via close(), but the fd will be closed anyway. The
+                 * only condition we want to check for here is whether
+                 * the fd was invalid at all... */
+
+                assert(close_nointr(fd) != -EBADF);
+        }
+
+        return -1;
+}
+
+usec_t now(clockid_t clock_id) {
+        struct timespec ts;
+
+        assert(clock_gettime(clock_id, &ts) == 0);
+
+        return timespec_load(&ts);
+}
+
+struct timespec *timespec_store(struct timespec *ts, usec_t u)  {
+        assert(ts);
+
+        if (u == USEC_INFINITY ||
+            u / USEC_PER_SEC >= TIME_T_MAX) {
+                ts->tv_sec = (time_t) -1;
+                ts->tv_nsec = -1L;
+                return ts;
+        }
+
+        ts->tv_sec = (time_t) (u / USEC_PER_SEC);
+        ts->tv_nsec = (long) ((u % USEC_PER_SEC) * NSEC_PER_USEC);
+
+        return ts;
+}
+
+usec_t timespec_load(const struct timespec *ts) {
+        assert(ts);
+
+        if (ts->tv_sec < 0 || ts->tv_nsec < 0)
+                return USEC_INFINITY;
+
+        if ((usec_t) ts->tv_sec > (UINT64_MAX - (ts->tv_nsec / NSEC_PER_USEC)) / USEC_PER_SEC)
+                return USEC_INFINITY;
+
+        return
+                (usec_t) ts->tv_sec * USEC_PER_SEC +
+                (usec_t) ts->tv_nsec / NSEC_PER_USEC;
 }

@@ -45,37 +45,17 @@ def lib(*names, **kw):
                      + '\n'.join(results) + '\n')
     sys.exit(status)
 
-version = '235'
+version = '249'
 defines = {'define_macros':[('PACKAGE_VERSION', '"{}"'.format(version))]}
 
-_journal = Extension('systemd/_journal',
-                     sources = ['systemd/_journal.c',
-                                'systemd/pyutil.c'],
+_fsprg = Extension('systemd/_fsprg',
+                     sources = ['systemd/_fsprg.c',
+                                'systemd/util.c',
+                                'systemd/fsprg.c'],
                      extra_compile_args=['-std=c99', '-Werror=implicit-function-declaration'],
                      **lib('libsystemd', 'libsystemd-journal', **defines))
-_reader = Extension('systemd/_reader',
-                     sources = ['systemd/_reader.c',
-                                'systemd/pyutil.c',
-                                'systemd/strv.c'],
-                     extra_compile_args=['-std=c99', '-Werror=implicit-function-declaration'],
-                     **lib('libsystemd', 'libsystemd-journal', **defines))
-_daemon = Extension('systemd/_daemon',
-                     sources = ['systemd/_daemon.c',
-                                'systemd/pyutil.c',
-                                'systemd/util.c'],
-                     extra_compile_args=['-std=c99', '-Werror=implicit-function-declaration'],
-                     **lib('libsystemd', 'libsystemd-daemon', **defines))
-id128 = Extension('systemd/id128',
-                     sources = ['systemd/id128.c',
-                                'systemd/pyutil.c'],
-                     extra_compile_args=['-std=c99', '-Werror=implicit-function-declaration'],
-                     **lib('libsystemd', 'libsystemd-id128', **defines))
-login = Extension('systemd/login',
-                     sources = ['systemd/login.c',
-                                'systemd/pyutil.c',
-                                'systemd/strv.c'],
-                     extra_compile_args=['-std=c99', '-Werror=implicit-function-declaration'],
-                     **lib('libsystemd', 'libsystemd-login', **defines))
+
+
 setup (name = 'systemd-python',
        version = version,
        description = 'Python interface for libsystemd',
@@ -91,13 +71,5 @@ setup (name = 'systemd-python',
            'Topic :: System :: Logging',
            'License :: OSI Approved :: GNU Lesser General Public License v2 or later (LGPLv2+)',
            ],
-       py_modules = ['systemd.journal', 'systemd.daemon',
-                     'systemd.test.test_daemon',
-                     'systemd.test.test_journal',
-                     'systemd.test.test_login',
-                     'systemd.test.test_id128'],
-       ext_modules = [_journal,
-                      _reader,
-                      _daemon,
-                      id128,
-                      login])
+       py_modules = ['systemd.fsprg'],
+       ext_modules = [_fsprg])

@@ -21,6 +21,26 @@
 
 #include <netinet/ip.h>
 #include <arpa/inet.h>
+#include <inttypes.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
+#include <inttypes.h>
+#include <stdint.h>
+#include <poll.h>
+#include <stdio.h>
+#include <assert.h>
+#include <errno.h>
+#include "macro.h"
+
+typedef uint64_t usec_t;
+typedef uint64_t nsec_t;
+
+#define USEC_INFINITY ((usec_t) UINT64_MAX)
+#define USEC_PER_SEC  ((usec_t) 1000000ULL)
+#define TIME_T_MAX (time_t)((UINTMAX_C(1) << ((sizeof(time_t) << 3) - 1)) - 1)
+#define NSEC_PER_USEC ((nsec_t) 1000ULL)
 
 union sockaddr_union {
         struct sockaddr sa;
@@ -31,3 +51,23 @@ union sockaddr_union {
 int safe_atou(const char *s, unsigned *ret_u);
 int parse_sockaddr(const char *s,
                    union sockaddr_union *addr, unsigned *addr_len);
+
+ssize_t loop_read(int fd, void *buf, size_t nbytes, bool do_poll);
+
+int safe_close(int fd);
+int ppoll_usec(struct pollfd *fds, size_t nfds, usec_t timeout);
+
+usec_t timespec_load(const struct timespec *ts) _pure_;
+
+usec_t now(clockid_t clock);
+struct timespec* timespec_store(struct timespec *ts, usec_t u);
+
+static inline void _reset_errno_(int *saved_errno) {
+        if (*saved_errno < 0) /* Invalidated by UNPROTECT_ERRNO? */
+                return;
+
+        errno = *saved_errno;
+}
+
+#define PROTECT_ERRNO                                                   \
+        _cleanup_(_reset_errno_) _unused_ int _saved_errno_ = errno
