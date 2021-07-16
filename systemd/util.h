@@ -34,6 +34,9 @@
 #include <errno.h>
 #include "macro.h"
 
+size_t page_size(void) _pure_;
+#define PAGE_ALIGN(l) ALIGN_TO((l), page_size())
+
 typedef uint64_t usec_t;
 typedef uint64_t nsec_t;
 
@@ -47,6 +50,10 @@ union sockaddr_union {
         struct sockaddr_in in;
         struct sockaddr_in6 in6;
 };
+
+static inline size_t ALIGN_TO(size_t l, size_t ali) {
+        return ((l + ali - 1) & ~(ali - 1));
+}
 
 int safe_atou(const char *s, unsigned *ret_u);
 int parse_sockaddr(const char *s,

@@ -1,7 +1,7 @@
 /*-*- Mode: C; c-basic-offset: 8; indent-tabs-mode: nil -*-*/
 
 #pragma once
-
+#include <malloc.h>
 /***
 
   Copyright 2010 Lennart Poettering
@@ -23,6 +23,28 @@
 #define _const_ __attribute__ ((const))
 #define _pure_ __attribute__ ((pure))
 #define _unused_ __attribute__((__unused__))
+#define _likely_(x) (__builtin_expect(!!(x), 1))
+
+#if __GNUC__ >= 7
+#define _fallthrough_ __attribute__((__fallthrough__))
+#else
+#define _fallthrough_
+#endif
+
+/* Define C11 thread_local attribute even on older gcc compiler
+ * version */
+#ifndef thread_local
+/*
+ * Don't break on glibc < 2.16 that doesn't define __STDC_NO_THREADS__
+ * see http://gcc.gnu.org/bugzilla/show_bug.cgi?id=53769
+ */
+#if __STDC_VERSION__ >= 201112L && !(defined(__STDC_NO_THREADS__) || (defined(__GNU_LIBRARY__) && __GLIBC__ == 2 && __GLIBC_MINOR__ < 16))
+#define thread_local _Thread_local
+#else
+#define thread_local __thread
+#endif
+#endif
+
 
 #define DISABLE_WARNING_MISSING_PROTOTYPES                              \
         _Pragma("GCC diagnostic push");                                 \

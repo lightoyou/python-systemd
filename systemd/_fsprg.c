@@ -1,30 +1,112 @@
-/*-*- Mode: C; c-basic-offset: 8; indent-tabs-mode: nil -*-*/
-
-/***
-
-  Copyright 2012 David Strauss <david@davidstrauss.net>
-
-  python-systemd is free software; you can redistribute it and/or modify it
-  under the terms of the GNU Lesser General Public License as published by
-  the Free Software Foundation; either version 2.1 of the License, or
-  (at your option) any later version.
-
-  python-systemd is distributed in the hope that it will be useful, but
-  WITHOUT ANY WARRANTY; without even the implied warranty of
-  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
-  Lesser General Public License for more details.
-
-  You should have received a copy of the GNU Lesser General Public License
-  along with python-systemd; If not, see <http://www.gnu.org/licenses/>.
-***/
 
 #include <Python.h>
 
 #include <alloca.h>
 #include <systemd/sd-messages.h>
 #include <fcntl.h>
+#include <sys/mman.h>
+
 #include "fsprg.h"
 #include "util.h"
+
+
+static PyObject*  journal_file_fss_load(PyObject *self, PyObject *args) {
+        int r, fd = -1;
+        char *p = NULL;
+        struct stat st;
+        FSSHeader *m = NULL;
+        sd_id128_t machine;
+        JournalFile f;
+
+        r = sd_id128_get_machine(&machine);
+
+
+        if (r < 0)
+                return r;
+
+        if (asprintf(&p, "/var/log/journal/" SD_ID128_FORMAT_STR "/fss",
+                     SD_ID128_FORMAT_VAL(machine)) < 0)
+                return -ENOMEM;
+
+        fd = open(p, O_RDWR|O_CLOEXEC|O_NOCTTY, 0600);
+        if (fstat(fd, &st) < 0) {
+                r = -errno;
+                goto finish;
+        }
+
+        if (st.st_size < (off_t) sizeof(FSSHeader)) {
+                r = -ENODATA;
+                goto finish;
+        }
+
+        m = mmap(NULL, PAGE_ALIGN(sizeof(FSSHeader)), PROT_READ, MAP_SHARED, fd, 0);
+        if (m == MAP_FAILED) {
+                m = NULL;
+                r = -errno;
+                goto finish;
+        }
+
+        if (memcmp(m->signature, FSS_HEADER_SIGNATURE, 8) != 0) {
+                r = -EBADMSG;
+                goto finish;
+        }
+
+        if (m->incompatible_flags != 0) {
+                r = -EPROTONOSUPPORT;
+                goto finish;
+        }
+
+        if (le64toh(m->header_size) < sizeof(FSSHeader)) {
+                r = -EBADMSG;
+                goto finish;
+        }
+
+        if (le64toh(m->fsprg_state_size) != FSPRG_stateinbytes(le16toh(m->fsprg_secpar))) {
+                r = -EBADMSG;
+                goto finish;
+        }
+
+        f.fss_file_size = le64toh(m->header_size) + le64toh(m->fsprg_state_size);
+        if ((uint64_t) st.st_size < f.fss_file_size) {
+                r = -ENODATA;
+                goto finish;
+        }
+
+        if (!sd_id128_equal(machine, m->machine_id)) {
+                r = -EHOSTDOWN;
+                goto finish;
+        }
+
+        if (le64toh(m->start_usec) <= 0 ||
+            le64toh(m->interval_usec) <= 0) {
+                r = -EBADMSG;
+                goto finish;
+        }
+
+        f.fss_file = mmap(NULL, PAGE_ALIGN(f.fss_file_size), PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
+        if (f.fss_file == MAP_FAILED) {
+                f.fss_file = NULL;
+                r = -errno;
+                goto finish;
+        }
+
+        f.fss_start_usec = le64toh(f.fss_file->start_usec);
+        f.fss_interval_usec = le64toh(f.fss_file->interval_usec);
+
+        f.fsprg_state = (uint8_t*) f.fss_file + le64toh(f.fss_file->header_size);
+        f.fsprg_state_size = le64toh(f.fss_file->fsprg_state_size);
+
+        
+        r = 0;
+
+finish:
+        if (m)
+                munmap(m, PAGE_ALIGN(sizeof(FSSHeader)));
+
+        safe_close(fd);
+        free(p);
+        Py_RETURN_NONE;
+}
 
 
 static PyObject* setup_keys(PyObject *self, PyObject *args) {
@@ -72,9 +154,9 @@ static PyObject* setup_keys(PyObject *self, PyObject *args) {
 
 static PyMethodDef methods[] = {
         { "setup_keys",  setup_keys, METH_VARARGS, NULL },
+        { "journal_file_fss_load",  journal_file_fss_load, METH_VARARGS, NULL },
         {}        /* Sentinel */
 };
-
 
 
 static struct PyModuleDef module = {

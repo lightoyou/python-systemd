@@ -55,6 +55,12 @@ _fsprg = Extension('systemd/_fsprg',
                      extra_compile_args=['-std=c99', '-Werror=implicit-function-declaration'],
                      **lib('libsystemd', 'libsystemd-journal', **defines))
 
+_siphash24 = Extension('systemd/_siphash24',
+                     sources = ['systemd/_siphash24.c',
+                                'systemd/siphash24.c'
+                               ],
+                     extra_compile_args=['-std=c99' ,'-D_DEFAULT_SOURCE',  '-Werror=implicit-function-declaration'],
+                     **lib('libsystemd', 'libsystemd-journal', **defines))
 
 setup (name = 'systemd-python',
        version = version,
@@ -72,4 +78,4 @@ setup (name = 'systemd-python',
            'License :: OSI Approved :: GNU Lesser General Public License v2 or later (LGPLv2+)',
            ],
        py_modules = ['systemd.fsprg'],
-       ext_modules = [_fsprg])
+       ext_modules = [_fsprg, _siphash24])
