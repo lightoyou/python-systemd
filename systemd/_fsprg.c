@@ -10,6 +10,7 @@
 #include "util.h"
 
 
+
 static PyObject*  journal_file_fss_load(PyObject *self, PyObject *args) {
         int r, fd = -1;
         char *p = NULL;
@@ -17,6 +18,8 @@ static PyObject*  journal_file_fss_load(PyObject *self, PyObject *args) {
         FSSHeader *m = NULL;
         sd_id128_t machine;
         JournalFile f;
+
+        uint8_t key[256/8];
 
         r = sd_id128_get_machine(&machine);
 
@@ -95,8 +98,20 @@ static PyObject*  journal_file_fss_load(PyObject *self, PyObject *args) {
 
         f.fsprg_state = (uint8_t*) f.fss_file + le64toh(f.fss_file->header_size);
         f.fsprg_state_size = le64toh(f.fss_file->fsprg_state_size);
+      
+       
+        printf("%" PRIu8 "\n",htole64(FSPRG_GetEpoch(f.fsprg_state)));
 
-        
+        printf("%" PRIx8 "\n",f.fsprg_state);
+
+
+        FSPRG_GetKey(f.fsprg_state, key, sizeof(key), 0);
+
+        for (size_t i = 0; i < (256/8); i++)
+        {
+        printf ("KEY[%zu] = %#" PRIx8 "\n", i, key[i]); 
+        }
+
         r = 0;
 
 finish:
@@ -119,6 +134,8 @@ static PyObject* setup_keys(PyObject *self, PyObject *args) {
         int fd = -1;
         uint64_t n;
 
+        static usec_t arg_interval = DEFAULT_FSS_INTERVAL_USEC;
+
         r = sd_id128_get_machine(&machine);
     
         mpk_size = FSPRG_mskinbytes(FSPRG_RECOMMENDED_SECPAR);
@@ -129,7 +146,7 @@ static PyObject* setup_keys(PyObject *self, PyObject *args) {
 
         state_size = FSPRG_stateinbytes(FSPRG_RECOMMENDED_SECPAR);
         state = alloca(state_size);
-    
+        
         fd = open("/dev/random", O_RDONLY|O_CLOEXEC|O_NOCTTY);
         
         l = loop_read(fd, seed, seed_size, true);
@@ -138,8 +155,7 @@ static PyObject* setup_keys(PyObject *self, PyObject *args) {
         FSPRG_GenState0(state, mpk, seed, seed_size);
 
         n = now(CLOCK_REALTIME);
-
-
+        n /= arg_interval;
         safe_close(fd);
 
         for (size_t i = 0; i < seed_size; i++) {
@@ -147,8 +163,9 @@ static PyObject* setup_keys(PyObject *self, PyObject *args) {
                         putchar('-');
                 printf("%02x", ((uint8_t*) seed)[i]);
         }
-        Py_RETURN_NONE;
 
+        printf("/%llx-%llx\n", (unsigned long long) n, (unsigned long long) arg_interval);
+        Py_RETURN_NONE;
 
 }
 

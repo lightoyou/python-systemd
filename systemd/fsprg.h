@@ -34,8 +34,10 @@
 extern "C" {
 #endif
 
+
 #define FSPRG_RECOMMENDED_SECPAR 1536
 #define FSPRG_RECOMMENDED_SEEDLEN (96/8)
+#define DEFAULT_FSS_INTERVAL_USEC (15*USEC_PER_MINUTE)
 
 #define FSS_HEADER_SIGNATURE                                            \
         ((const char[]) { 'K', 'S', 'H', 'H', 'R', 'H', 'L', 'P' })

@@ -34,7 +34,7 @@
 #include <net/if.h>
 #include <errno.h>
 #include <inttypes.h>
-
+#include <time.h>
 #include "util.h"
 
 size_t page_size(void) {
@@ -305,9 +305,7 @@ int safe_close(int fd) {
 
 usec_t now(clockid_t clock_id) {
         struct timespec ts;
-
-        assert(clock_gettime(clock_id, &ts) == 0);
-
+        clock_gettime(clock_id, &ts);
         return timespec_load(&ts);
 }
 

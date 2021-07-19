@@ -392,7 +392,6 @@ void FSPRG_GetKey(const void *state, void *key, size_t keylen, uint32_t idx) {
         uint16_t secpar;
 
         initialize_libgcrypt();
-
         secpar = read_secpar(state + 0);
         det_randomize(key, keylen, state + 2, 2 * secpar / 8 + 8, idx);
 }

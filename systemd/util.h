@@ -40,6 +40,7 @@ size_t page_size(void) _pure_;
 typedef uint64_t usec_t;
 typedef uint64_t nsec_t;
 
+#define USEC_PER_MINUTE ((usec_t) (60ULL*USEC_PER_SEC))
 #define USEC_INFINITY ((usec_t) UINT64_MAX)
 #define USEC_PER_SEC  ((usec_t) 1000000ULL)
 #define TIME_T_MAX (time_t)((UINTMAX_C(1) << ((sizeof(time_t) << 3) - 1)) - 1)
@@ -65,14 +66,13 @@ int safe_close(int fd);
 int ppoll_usec(struct pollfd *fds, size_t nfds, usec_t timeout);
 
 usec_t timespec_load(const struct timespec *ts) _pure_;
-
 usec_t now(clockid_t clock);
+
 struct timespec* timespec_store(struct timespec *ts, usec_t u);
 
 static inline void _reset_errno_(int *saved_errno) {
         if (*saved_errno < 0) /* Invalidated by UNPROTECT_ERRNO? */
                 return;
-
         errno = *saved_errno;
 }
 
