@@ -1,162 +1,272 @@
 
 #include <Python.h>
-
 #include <alloca.h>
 #include <systemd/sd-messages.h>
 #include <fcntl.h>
 #include <sys/mman.h>
-
+#include <gcrypt.h>
 #include "fsprg.h"
 #include "util.h"
 
+static void printkey(void *key, size_t key_size) {
+        size_t i;
+        for(i = 0; i < key_size; i++)
+                printf("%02x ", ((uint8_t*)key)[i]);
+        printf("\n");
+}
 
+static uint8_t * parse_verification_key(const char *key) {
+        size_t seed_size = FSPRG_RECOMMENDED_SEEDLEN;
+        uint8_t seed[seed_size];
+        size_t c;
+        const char *k;
+        int r;
+        unsigned long long start, interval;
 
-static PyObject*  journal_file_fss_load(PyObject *self, PyObject *args) {
-        int r, fd = -1;
-        char *p = NULL;
-        struct stat st;
-        FSSHeader *m = NULL;
-        sd_id128_t machine;
-        JournalFile f;
-
-        uint8_t key[256/8];
-
-        r = sd_id128_get_machine(&machine);
-
-
-        if (r < 0)
-                return r;
-
-        if (asprintf(&p, "/var/log/journal/" SD_ID128_FORMAT_STR "/fss",
-                     SD_ID128_FORMAT_VAL(machine)) < 0)
+        if (!seed)
                 return -ENOMEM;
-
-        fd = open(p, O_RDWR|O_CLOEXEC|O_NOCTTY, 0600);
-        if (fstat(fd, &st) < 0) {
-                r = -errno;
-                goto finish;
-        }
-
-        if (st.st_size < (off_t) sizeof(FSSHeader)) {
-                r = -ENODATA;
-                goto finish;
-        }
-
-        m = mmap(NULL, PAGE_ALIGN(sizeof(FSSHeader)), PROT_READ, MAP_SHARED, fd, 0);
-        if (m == MAP_FAILED) {
-                m = NULL;
-                r = -errno;
-                goto finish;
-        }
-
-        if (memcmp(m->signature, FSS_HEADER_SIGNATURE, 8) != 0) {
-                r = -EBADMSG;
-                goto finish;
-        }
-
-        if (m->incompatible_flags != 0) {
-                r = -EPROTONOSUPPORT;
-                goto finish;
-        }
-
-        if (le64toh(m->header_size) < sizeof(FSSHeader)) {
-                r = -EBADMSG;
-                goto finish;
-        }
-
-        if (le64toh(m->fsprg_state_size) != FSPRG_stateinbytes(le16toh(m->fsprg_secpar))) {
-                r = -EBADMSG;
-                goto finish;
-        }
-
-        f.fss_file_size = le64toh(m->header_size) + le64toh(m->fsprg_state_size);
-        if ((uint64_t) st.st_size < f.fss_file_size) {
-                r = -ENODATA;
-                goto finish;
-        }
-
-        if (!sd_id128_equal(machine, m->machine_id)) {
-                r = -EHOSTDOWN;
-                goto finish;
-        }
-
-        if (le64toh(m->start_usec) <= 0 ||
-            le64toh(m->interval_usec) <= 0) {
-                r = -EBADMSG;
-                goto finish;
-        }
-
-        f.fss_file = mmap(NULL, PAGE_ALIGN(f.fss_file_size), PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
-        if (f.fss_file == MAP_FAILED) {
-                f.fss_file = NULL;
-                r = -errno;
-                goto finish;
-        }
-
-        f.fss_start_usec = le64toh(f.fss_file->start_usec);
-        f.fss_interval_usec = le64toh(f.fss_file->interval_usec);
-
-        f.fsprg_state = (uint8_t*) f.fss_file + le64toh(f.fss_file->header_size);
-        f.fsprg_state_size = le64toh(f.fss_file->fsprg_state_size);
-      
+        k = key;
        
-        printf("%" PRIu8 "\n",htole64(FSPRG_GetEpoch(f.fsprg_state)));
+        for (c = 0; c < seed_size; c++) {
+              
+                int x, y;
 
-        printf("%" PRIx8 "\n",f.fsprg_state);
+                while (*k == '-')
+                        k++;
 
+                x = unhexchar(*k);
+                if (x < 0) {
+                        return -EINVAL;
+                }
+                k++;
+                y = unhexchar(*k);
+                if (y < 0) {
+                        return -EINVAL;
+                }
+                k++;
 
-        FSPRG_GetKey(f.fsprg_state, key, sizeof(key), 0);
-
-        for (size_t i = 0; i < (256/8); i++)
-        {
-        printf ("KEY[%zu] = %#" PRIx8 "\n", i, key[i]); 
+                seed[c] = (uint8_t) (x * 16 + y);
         }
 
-        r = 0;
+        if (*k != '/') {
+                return -EINVAL;
+        }
+        k++;
 
-finish:
-        if (m)
-                munmap(m, PAGE_ALIGN(sizeof(FSSHeader)));
+        r = sscanf(k, "%llx-%llx", &start, &interval);
+        if (r != 2) {
+                return -EINVAL;
+        }
+        printkey(seed, seed_size);
+        return seed;
+}
 
-        safe_close(fd);
-        free(p);
+
+static PyObject* evolve(PyObject *self, PyObject *args) {
+       size_t state_size = FSPRG_stateinbytes(FSPRG_RECOMMENDED_SECPAR);
+       uint8_t state[state_size];
+       Py_ssize_t n;
+       size_t i;
+       
+       PyObject *pItem;
+       PyObject *pList;
+       PyObject* pystate = PyList_New(state_size);
+       PyObject* value;
+       if (!PyArg_ParseTuple(args, "O!", &PyList_Type, &pList)) {
+               PyErr_SetString(PyExc_TypeError, "parameter must be a list.");
+               return NULL;
+        }
+        // Recover state from pyObject
+        n = PyList_Size(pList);
+        for (i=0; i<n; i++) {
+                pItem = PyList_GetItem(pList, i);
+                state[i] = (uint8_t)PyLong_AsUnsignedLong(pItem);
+                if(!PyLong_Check(pItem)) {
+                        PyErr_SetString(PyExc_TypeError, "list items must be integers.");
+                        return NULL;
+                }
+        }
+       FSPRG_Evolve(state);
+
+       for(i = 0; i < state_size; i++)
+        {
+            value = PyLong_FromUnsignedLong((uint8_t*)state[i]);
+            PyList_SetItem(pystate,i,value);
+        }
+
+       return pystate;
+}
+
+static PyObject* get_epoch(PyObject *self, PyObject *args) {
+        
+       uint64_t epoch;
+
+       size_t state_size = FSPRG_stateinbytes(FSPRG_RECOMMENDED_SECPAR);
+       uint8_t state[state_size];
+       Py_ssize_t n;
+       size_t i;
+       
+       PyObject *pItem;
+       PyObject *pList;
+
+       if (!PyArg_ParseTuple(args, "O!", &PyList_Type, &pList)) {
+               return NULL;
+        }
+         
+        n = PyList_Size(pList);
+        for (i=0; i<n; i++) {
+                pItem = PyList_GetItem(pList, i);
+                state[i] = (uint8_t)PyLong_AsUnsignedLong(pItem);
+                if(!PyLong_Check(pItem)) {
+                        PyErr_SetString(PyExc_TypeError, "list items must be integers.");
+                        return NULL;
+                }
+        }
+
+       epoch = FSPRG_GetEpoch(state);
+       
+       printf("epoch_{%8llu}\n", (unsigned long long)epoch);
+       Py_RETURN_NONE;
+}
+
+static PyObject* seek(PyObject *self, PyObject *args) {
+       PyObject *pState; // list
+       PyObject *pItem; // pState object
+       PyObject *pGoal; // int
+       PyObject *pSeed; // str
+   
+       Py_ssize_t n;
+
+       size_t state_size = FSPRG_stateinbytes(FSPRG_RECOMMENDED_SECPAR);
+       uint8_t state[state_size];
+       PyObject* pystate = PyList_New(state_size);
+       PyObject* value;
+       size_t i;
+       
+       size_t seed_size = FSPRG_RECOMMENDED_SEEDLEN;
+       uint8_t seed[seed_size];
+       uint64_t epoch;
+       
+       uint8_t msk_size = FSPRG_mskinbytes(FSPRG_RECOMMENDED_SECPAR);
+       uint8_t msk[msk_size];
+
+       if (!PyArg_ParseTuple(args, "O!Ks", &PyList_Type, &pState, &pGoal, &pSeed)) {
+               PyErr_SetString(PyExc_TypeError, "wrong parameter.");
+               return NULL;
+        }
+
+        // Recover State from Py object
+        n = PyList_Size(pState);
+        for (i=0; i<n; i++) {
+                pItem = PyList_GetItem(pState, i);
+                state[i] = (uint8_t)PyLong_AsUnsignedLong(pItem);
+                if(!PyLong_Check(pItem)) {
+                        PyErr_SetString(PyExc_TypeError, "list items must be integers.");
+                        return NULL;
+                }
+        }
+
+        printf("State");
+        for(i = 0; i < state_size; i++)
+                printf("%u ", ((uint8_t*)state)[i]);
+        printf("\n");
+        printf("Seed : %s\n", pSeed);
+        *seed = parse_verification_key((const char * )pSeed);
+     
+        printf("Goal : %8llu\n", pGoal);
+
+       
+        FSPRG_GenMK(msk, NULL, seed, seed_size, FSPRG_RECOMMENDED_SECPAR);
+        FSPRG_Seek(state, (uint64_t)pGoal, msk, seed, seed_size);
+
+
+
+        for(i = 0; i < state_size; i++)
+        {
+            value = PyLong_FromUnsignedLong((uint8_t*)state[i]);
+            PyList_SetItem(pystate,i,value);
+        }
+
+       return pystate;
+
+}
+
+
+
+static PyObject* get_key(PyObject *self, PyObject *args) {
+
+       uint8_t key[256 / 8];/* Let's pass 256 bit from FSPRG to HMAC */
+
+       size_t state_size = FSPRG_stateinbytes(FSPRG_RECOMMENDED_SECPAR);
+       uint8_t state[state_size];
+       Py_ssize_t n;
+       size_t i;
+       PyObject *pItem;
+       PyObject *pList;
+       if (!PyArg_ParseTuple(args, "O!", &PyList_Type, &pList)) {
+               PyErr_SetString(PyExc_TypeError, "parameter must be a list.");
+               return NULL;
+        }
+        // Recover State from Py object
+        n = PyList_Size(pList);
+        for (i=0; i<n; i++) {
+                pItem = PyList_GetItem(pList, i);
+                state[i] = (uint8_t)PyLong_AsUnsignedLong(pItem);
+                if(!PyLong_Check(pItem)) {
+                        PyErr_SetString(PyExc_TypeError, "list items must be integers.");
+                        return NULL;
+                }
+        }
+
+        FSPRG_GetKey(state, key, sizeof(key), 0);
+        printkey(key, sizeof(key));
         Py_RETURN_NONE;
 }
 
 
+/*
 static PyObject* setup_keys(PyObject *self, PyObject *args) {
 
-        size_t mpk_size, seed_size, state_size;
+        size_t mpk_size = FSPRG_mskinbytes(FSPRG_RECOMMENDED_SECPAR);
+        size_t seed_size = FSPRG_RECOMMENDED_SEEDLEN;
+        size_t state_size = FSPRG_stateinbytes(FSPRG_RECOMMENDED_SECPAR);
         ssize_t l;
         uint8_t *mpk, *seed, *state;
         sd_id128_t machine;
         int r;
-        int fd = -1;
+       // int fd = -1;
         uint64_t n;
 
         static usec_t arg_interval = DEFAULT_FSS_INTERVAL_USEC;
 
+
+        p = gcry_check_version("1.4.5");
+        assert(p);
+        gcry_control(GCRYCTL_DISABLE_SECMEM, 0);
+        gcry_control(GCRYCTL_INITIALIZATION_FINISHED, 0);
+
+
         r = sd_id128_get_machine(&machine);
     
-        mpk_size = FSPRG_mskinbytes(FSPRG_RECOMMENDED_SECPAR);
         mpk = alloca(mpk_size);
-
-        seed_size = FSPRG_RECOMMENDED_SEEDLEN;
         seed = alloca(seed_size);
-
-        state_size = FSPRG_stateinbytes(FSPRG_RECOMMENDED_SECPAR);
         state = alloca(state_size);
         
-        fd = open("/dev/random", O_RDONLY|O_CLOEXEC|O_NOCTTY);
-        
-        l = loop_read(fd, seed, seed_size, true);
+        gcry_randomize(seed, seed_size, GCRY_STRONG_RANDOM);
 
+        //fd = open("/dev/random", O_RDONLY|O_CLOEXEC|O_NOCTTY);
+        //l = loop_read(fd, seed, seed_size, true);
+
+        printf("Generating master keys (this may take some time)..."); fflush(stdout);
         FSPRG_GenMK(NULL, mpk, seed, seed_size, FSPRG_RECOMMENDED_SECPAR);
+        printf("Generating the first state"); fflush(stdout);
         FSPRG_GenState0(state, mpk, seed, seed_size);
+        printkey(state, state_size);
 
         n = now(CLOCK_REALTIME);
         n /= arg_interval;
-        safe_close(fd);
+        
+        //safe_close(fd);
 
         for (size_t i = 0; i < seed_size; i++) {
                 if (i > 0 && i % 3 == 0)
@@ -169,12 +279,16 @@ static PyObject* setup_keys(PyObject *self, PyObject *args) {
 
 }
 
+*/
+
+
 static PyMethodDef methods[] = {
-        { "setup_keys",  setup_keys, METH_VARARGS, NULL },
-        { "journal_file_fss_load",  journal_file_fss_load, METH_VARARGS, NULL },
+        { "get_key",  get_key, METH_VARARGS, NULL },
+        { "get_epoch",  get_epoch, METH_VARARGS, NULL },
+        { "evolve",  evolve, METH_VARARGS, NULL },
+        { "seek",  seek, METH_VARARGS, NULL },
         {}        /* Sentinel */
 };
-
 
 static struct PyModuleDef module = {
         PyModuleDef_HEAD_INIT,
@@ -184,10 +298,8 @@ static struct PyModuleDef module = {
         .m_methods = methods,
 };
 
-DISABLE_WARNING_MISSING_PROTOTYPES;
 PyMODINIT_FUNC PyInit__fsprg(void) {
         PyObject *m;
-
         m = PyModule_Create(&module);
         if (!m)
                 return NULL;

@@ -56,6 +56,8 @@ static inline size_t ALIGN_TO(size_t l, size_t ali) {
         return ((l + ali - 1) & ~(ali - 1));
 }
 
+int unhexchar(char c) _const_;
+
 int safe_atou(const char *s, unsigned *ret_u);
 int parse_sockaddr(const char *s,
                    union sockaddr_union *addr, unsigned *addr_len);
