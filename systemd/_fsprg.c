@@ -58,7 +58,7 @@ static uint8_t * parse_verification_key(const char *key) {
                 return -EINVAL;
         }
         printkey(seed, seed_size);
-        return seed;
+        return *seed;
 }
 
 
@@ -172,8 +172,11 @@ static PyObject* seek(PyObject *self, PyObject *args) {
         printf("\n");
         printf("Seed : %s\n", pSeed);
         *seed = parse_verification_key((const char * )pSeed);
-     
-        printf("Goal : %8llu\n", pGoal);
+        printkey(seed, seed_size);
+
+
+
+        printf("Goal : %8llu\n", (unsigned long long)pGoal);
 
        
         FSPRG_GenMK(msk, NULL, seed, seed_size, FSPRG_RECOMMENDED_SECPAR);

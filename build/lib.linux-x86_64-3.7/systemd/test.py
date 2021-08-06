@@ -9,24 +9,21 @@ _fsprg.get_epoch(state)
 print("--------------------------------------")
 #rotation des clés
 print(" ----- Evolve --------")
-
-new = _fsprg.evolve(state)
-_fsprg.get_key(new)
-_fsprg.get_epoch(new)
+first = _fsprg.evolve(state)
 
 
+#new = _fsprg.evolve(first)
 
+_fsprg.get_key(first)
+_fsprg.get_epoch(first)
+
+print(first)
 # saut pour vérification
 #state_900 = _fsprg.seek(state, 900, "a83e8b-5d792f-e8a118-6a47cb/1f0e7c2-2faf080")
 #_fsprg.get_key(state_900)
 #_fsprg.get_epoch(state_900)
 
 print("---- Recover ------ ")
-state_1 = _fsprg.seek(state, 1, "a83e8b-5d792f-e8a118-6a47cb/1f0e7c2-2faf080")
-
-_fsprg.get_key(state_1)
-_fsprg.get_epoch(state_1)
-
-state_0 = _fsprg.seek(state_1, 0,  "a83e8b-5d792f-e8a118-6a47cb/1f0e7c2-2faf080")
-_fsprg.get_key(state_0)
-_fsprg.get_epoch(state_0)
+s = _fsprg.seek(first, 1, "a83e8b-5d792f-e8a118-6a47cb/1f0e7c2-2faf080")
+_fsprg.get_key(s)
+_fsprg.get_epoch(s)
