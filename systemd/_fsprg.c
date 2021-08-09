@@ -100,7 +100,7 @@ static PyObject* evolve(PyObject *self, PyObject *args) {
 static PyObject* get_epoch(PyObject *self, PyObject *args) {
         
        uint64_t epoch;
-
+       PyObject *pEpoch;
        size_t state_size = FSPRG_stateinbytes(FSPRG_RECOMMENDED_SECPAR);
        uint8_t state[state_size];
        Py_ssize_t n;
@@ -124,12 +124,12 @@ static PyObject* get_epoch(PyObject *self, PyObject *args) {
         }
 
        epoch = FSPRG_GetEpoch(state);
-       
-       printf("epoch_{%8llu}\n", (unsigned long long)epoch);
-       Py_RETURN_NONE;
+       pEpoch = PyLong_FromUnsignedLong(epoch);
+       return pEpoch;
 }
 
 static PyObject* seek(PyObject *self, PyObject *args) {
+
        PyObject *pState; // list
        PyObject *pItem; // pState object
        PyObject *pGoal; // int
@@ -166,32 +166,29 @@ static PyObject* seek(PyObject *self, PyObject *args) {
                 }
         }
 
+
+        /*
         printf("State");
         for(i = 0; i < state_size; i++)
                 printf("%u ", ((uint8_t*)state)[i]);
         printf("\n");
-        printf("Seed : %s\n", pSeed);
+        printf("Seed : %s\n", pSeed);*/
         *seed = parse_verification_key((const char * )pSeed);
-        printkey(seed, seed_size);
+        //printkey(seed, seed_size);
 
 
 
         printf("Goal : %8llu\n", (unsigned long long)pGoal);
 
-       
         FSPRG_GenMK(msk, NULL, seed, seed_size, FSPRG_RECOMMENDED_SECPAR);
         FSPRG_Seek(state, (uint64_t)pGoal, msk, seed, seed_size);
-
-
 
         for(i = 0; i < state_size; i++)
         {
             value = PyLong_FromUnsignedLong((uint8_t*)state[i]);
             PyList_SetItem(pystate,i,value);
         }
-
        return pystate;
-
 }
 
 
@@ -199,6 +196,8 @@ static PyObject* seek(PyObject *self, PyObject *args) {
 static PyObject* get_key(PyObject *self, PyObject *args) {
 
        uint8_t key[256 / 8];/* Let's pass 256 bit from FSPRG to HMAC */
+       char skey[256];
+      
 
        size_t state_size = FSPRG_stateinbytes(FSPRG_RECOMMENDED_SECPAR);
        uint8_t state[state_size];
@@ -206,6 +205,7 @@ static PyObject* get_key(PyObject *self, PyObject *args) {
        size_t i;
        PyObject *pItem;
        PyObject *pList;
+
        if (!PyArg_ParseTuple(args, "O!", &PyList_Type, &pList)) {
                PyErr_SetString(PyExc_TypeError, "parameter must be a list.");
                return NULL;
@@ -221,14 +221,21 @@ static PyObject* get_key(PyObject *self, PyObject *args) {
                 }
         }
 
-        FSPRG_GetKey(state, key, sizeof(key), 0);
-        printkey(key, sizeof(key));
-        Py_RETURN_NONE;
+        FSPRG_GetKey(state, key, sizeof(key), 0);        
+
+        //convert key to string 
+        sprintf(&skey[0], "%02x", ((uint8_t*)key[0]));
+        int j = 2;
+        for(i = 1; i < sizeof(key); i++)
+        {
+          sprintf(&skey[j], "%02x", ((uint8_t*)key[i]));
+          j = j + 2;
+        }
+        return PyUnicode_FromString(skey);
 }
 
 
-/*
-static PyObject* setup_keys(PyObject *self, PyObject *args) {
+static PyObject* setup_key(PyObject *self, PyObject *args) {
 
         size_t mpk_size = FSPRG_mskinbytes(FSPRG_RECOMMENDED_SECPAR);
         size_t seed_size = FSPRG_RECOMMENDED_SEEDLEN;
@@ -237,17 +244,19 @@ static PyObject* setup_keys(PyObject *self, PyObject *args) {
         uint8_t *mpk, *seed, *state;
         sd_id128_t machine;
         int r;
+        const char *p;
        // int fd = -1;
         uint64_t n;
+        size_t i;
+        PyObject* pystate = PyList_New(state_size);
+        PyObject* value;
 
         static usec_t arg_interval = DEFAULT_FSS_INTERVAL_USEC;
-
 
         p = gcry_check_version("1.4.5");
         assert(p);
         gcry_control(GCRYCTL_DISABLE_SECMEM, 0);
         gcry_control(GCRYCTL_INITIALIZATION_FINISHED, 0);
-
 
         r = sd_id128_get_machine(&machine);
     
@@ -260,29 +269,36 @@ static PyObject* setup_keys(PyObject *self, PyObject *args) {
         //fd = open("/dev/random", O_RDONLY|O_CLOEXEC|O_NOCTTY);
         //l = loop_read(fd, seed, seed_size, true);
 
-        printf("Generating master keys (this may take some time)..."); fflush(stdout);
+        printf("Generating master keys (this may take some time)...\n"); fflush(stdout);
         FSPRG_GenMK(NULL, mpk, seed, seed_size, FSPRG_RECOMMENDED_SECPAR);
-        printf("Generating the first state"); fflush(stdout);
+        printf("Generating the first state\n"); fflush(stdout);
         FSPRG_GenState0(state, mpk, seed, seed_size);
-        printkey(state, state_size);
+        
+        for(i = 0; i < state_size; i++)
+        {
+            value = PyLong_FromUnsignedLong((uint8_t*)state[i]);
+            PyList_SetItem(pystate,i,value);
+        }
 
         n = now(CLOCK_REALTIME);
         n /= arg_interval;
         
         //safe_close(fd);
 
+
+        // print original seed
         for (size_t i = 0; i < seed_size; i++) {
                 if (i > 0 && i % 3 == 0)
                         putchar('-');
                 printf("%02x", ((uint8_t*) seed)[i]);
         }
 
+
         printf("/%llx-%llx\n", (unsigned long long) n, (unsigned long long) arg_interval);
-        Py_RETURN_NONE;
+        return pystate;
 
 }
 
-*/
 
 
 static PyMethodDef methods[] = {
@@ -290,6 +306,7 @@ static PyMethodDef methods[] = {
         { "get_epoch",  get_epoch, METH_VARARGS, NULL },
         { "evolve",  evolve, METH_VARARGS, NULL },
         { "seek",  seek, METH_VARARGS, NULL },
+        { "setup_key",  setup_key, METH_VARARGS, NULL },
         {}        /* Sentinel */
 };
 
